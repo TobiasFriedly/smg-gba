@@ -97,6 +97,7 @@ static int game_placed_scenario(int stage, int selected){
 }
 
 static bool g_frame_had_load;
+static int g_fps;
 static void game_load_stage(int index, int start, int scenario){
     if((unsigned)index >= STAGE_COUNT || !stage_blobs[index]) return;
     g_frame_had_load = true;
@@ -275,6 +276,7 @@ static void game_tick(const KeyState* keys){
 static void play_draw_hud(void){
     Game* game = &g_game;
     const Player* p = &game->player;
+    if(g_debug_options & DEBUG_SHOW_FPS) hud_digits(HUD_STAR_X, HUD_STAR_Y + 18, g_fps);
     if(cutscene_draw_hud()) return;
     pointer_draw();
     talk_draw();
@@ -445,7 +447,10 @@ __attribute__((noinline)) static void game_draw_frame(uint8_t* framebuffer){
         scenario_select_set_fade(game);
         return;
     }
-    draw_sky(framebuffer, game->stage.sky, game->camera.orientation.x, game->camera.orientation.y);
+    perf_lap(PERF_OTHER);
+    if(g_render_style) render_style_begin(framebuffer);
+    else draw_sky(framebuffer, game->stage.sky, game->camera.orientation.x, game->camera.orientation.y);
+    perf_lap(PERF_SKY);
 
     game_collect_scene_figures();
     Figure player_attachment;
@@ -461,6 +466,7 @@ __attribute__((noinline)) static void game_draw_frame(uint8_t* framebuffer){
 
 static void game_run_frame(bool page, const KeyState* keys, fx dt){
     game_update_frame(dt, *keys);
+    perf_lap(PERF_LOGIC);
 
     g_display_full_res = game_scene(g_game.scene)->full_res;
     game_draw_frame(display_page(page));
@@ -478,6 +484,7 @@ int main(void){
     REG_IE = IRQ_VBLANK;
     REG_IME = 1;
     frame_timer_restart();
+    perf_init();
     g_input_latch_enabled = 1;
 
     game_init();
@@ -486,6 +493,7 @@ int main(void){
     fx dt = FXC(1.0f / 30.0f);
 
     uint32_t frame_timer_remainder = 0;
+    uint32_t fps_ticks = 0, fps_frames = 0;
     bool page = true;
     for(;;){
         uint16_t now;
@@ -507,10 +515,18 @@ int main(void){
         uint32_t elapsed = ticks + frame_timer_remainder;
         frame_timer_remainder = elapsed & 63;
         dt = fx_min(elapsed >> 6, FXC(1.0f / 8.0f));
+        fps_ticks += ticks;
+        fps_frames++;
+        if(fps_ticks >= 8192){
+            g_fps = (int)((fps_frames * 16384 + fps_ticks / 2) / fps_ticks);
+            fps_ticks = fps_frames = 0;
+        }
         if(g_frame_had_load){
             dt = 5;
             frame_timer_remainder = 0;
         }
+        if(g_frame_had_load || g_game.scene != SCENE_PLAY) fps_ticks = fps_frames = 0;
+        perf_frame_end(g_game.scene == SCENE_PLAY && !g_frame_had_load);
         g_frame_had_load = false;
     }
 }

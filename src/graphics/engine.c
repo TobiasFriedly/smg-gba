@@ -435,3 +435,93 @@ __attribute__((noinline)) static void draw_shadow(const Figure* figure, const Ca
         engine_emit_clipped(-1, t, RM_DARKEN, 0, &g_shadow_texture);
     }
 }
+
+uint8_t g_render_style;
+static uint8_t g_wire_line_colour;
+static uint8_t g_wire_colour, g_wire_background;
+
+static void render_style_begin(uint8_t* framebuffer){
+    static const uint8_t line_rgb[][3] = {{4, 31, 8}, {31, 31, 31}};
+    const uint8_t* rgb = line_rgb[g_wire_line_colour];
+    g_wire_colour = palette_nearest(rgb[0], rgb[1], rgb[2]);
+    g_wire_background = palette_nearest(0, 0, 0);
+    volatile uint32_t fill = g_wire_background * 0x01010101u;
+    for(int y = 0; y < FRAME_HEIGHT; y++) dma3_fill32(framebuffer + y * FRAME_STRIDE, &fill, FRAME_WIDTH / 4);
+}
+
+static inline int wire_outcode(int x, int y){
+    return (x < 0) | (x >= FRAME_WIDTH) << 1 | (y < 0) << 2 | (y >= FRAME_HEIGHT) << 3;
+}
+
+static void wire_line(uint8_t* fb, int x0, int y0, int x1, int y1){
+    int c0 = wire_outcode(x0, y0), c1 = wire_outcode(x1, y1);
+    while(c0 | c1){
+        if(c0 & c1) return;
+        int c = c0 ? c0 : c1, x, y;
+        if(c & 8){
+            x = x0 + (x1 - x0) * (FRAME_HEIGHT - 1 - y0) / (y1 - y0);
+            y = FRAME_HEIGHT - 1;
+        } else if(c & 4){
+            x = x0 + (x1 - x0) * -y0 / (y1 - y0);
+            y = 0;
+        } else if(c & 2){
+            y = y0 + (y1 - y0) * (FRAME_WIDTH - 1 - x0) / (x1 - x0);
+            x = FRAME_WIDTH - 1;
+        } else {
+            y = y0 + (y1 - y0) * -x0 / (x1 - x0);
+            x = 0;
+        }
+        if(c == c0){
+            x0 = x;
+            y0 = y;
+            c0 = wire_outcode(x0, y0);
+        } else {
+            x1 = x;
+            y1 = y;
+            c1 = wire_outcode(x1, y1);
+        }
+    }
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1, sx = x0 < x1 ? 1 : -1;
+    int dy = y1 > y0 ? y0 - y1 : y1 - y0, sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for(;;){
+        frame_put(fb, x0, y0, g_wire_colour);
+        if(x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if(e2 >= dy){
+            err += dy;
+            x0 += sx;
+        }
+        if(e2 <= dx){
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+static inline void wire_point(uint8_t* fb, int x, int y){
+    if((unsigned)x < FRAME_WIDTH && (unsigned)y < FRAME_HEIGHT) frame_put(fb, x, y, g_wire_colour);
+}
+
+void engine_style_face(uint32_t sa, uint32_t sb, uint32_t sc, unsigned mode){
+    if(mode == RM_ADD || mode == RM_DARKEN || mode == RM_TINT) return;
+    uint8_t* fb = g_engine_fb;
+    int ax = screen_x(sa) >> 4, ay = screen_y(sa) >> 4;
+    int bx = screen_x(sb) >> 4, by = screen_y(sb) >> 4;
+    int cx = screen_x(sc) >> 4, cy = screen_y(sc) >> 4;
+    if(g_render_style == RENDER_VERTICES){
+        wire_point(fb, ax, ay);
+        wire_point(fb, bx, by);
+        wire_point(fb, cx, cy);
+        return;
+    }
+    if(g_render_style == RENDER_HIDDEN_LINE){
+        DrawEntry e = {0xFFFF, RM_FLAT, g_wire_background, {sa, sb, sc}, {0, 0, 0}, NULL};
+        g_render_style = RENDER_NORMAL;
+        engine_raster(&e);
+        g_render_style = RENDER_HIDDEN_LINE;
+    }
+    wire_line(fb, ax, ay, bx, by);
+    wire_line(fb, bx, by, cx, cy);
+    wire_line(fb, cx, cy, ax, ay);
+}

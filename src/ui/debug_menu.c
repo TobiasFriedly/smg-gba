@@ -4,7 +4,8 @@ enum {
     DEBUG_PAGE_MISSIONS,
     DEBUG_PAGE_POINTS,
     DEBUG_PAGE_OPTIONS,
-    DEBUG_PAGE_POWERUPS
+    DEBUG_PAGE_POWERUPS,
+    DEBUG_PAGE_PERF
 };
 typedef struct {
     int16_t selected, scroll;
@@ -34,7 +35,8 @@ static const char* const debug_home[] = {"Resume",
                                          "Restore health",
                                          "Add 100 Star Bits",
                                          "Power-ups",
-                                         "Return to Observatory"};
+                                         "Return to Observatory",
+                                         "Performance"};
 static const char* const debug_option_names[] = {"Ignore enemy damage",
                                                  "Unlimited air",
                                                  "Unlimited Bee flight",
@@ -47,12 +49,16 @@ static const char* const debug_option_names[] = {"Ignore enemy damage",
                                                  "Skip mission intro",
                                                  "Falling drops",
                                                  "Large bursts fall",
+                                                 "Show FPS",
                                                  "Render detail",
-                                                 "Camera distance"};
+                                                 "Camera distance",
+                                                 "Render style",
+                                                 "Line colour"};
 static const uint16_t debug_option_bits[] = {
     DEBUG_NO_DAMAGE,      DEBUG_INFINITE_AIR,   DEBUG_INFINITE_BEE,  DEBUG_MAGNET,
     DEBUG_PULL_ASSIST,    DEBUG_FLIGHT_POINTER, DEBUG_MUSIC,         DEBUG_SOUND,
-    DEBUG_FREEZE_ENEMIES, DEBUG_SKIP_INTRO,     DEBUG_FALLING_DROPS, DEBUG_LARGE_FALLING_DROPS};
+    DEBUG_FREEZE_ENEMIES, DEBUG_SKIP_INTRO,     DEBUG_FALLING_DROPS, DEBUG_LARGE_FALLING_DROPS,
+    DEBUG_SHOW_FPS};
 #define DEBUG_OPTION_TOGGLE_COUNT ((int)(sizeof debug_option_bits / sizeof debug_option_bits[0]))
 
 static const char* const debug_powerup_names[] = {
@@ -87,8 +93,63 @@ static void debug_powerup(int row){
     }
     g_game.scene = SCENE_PLAY;
 }
+static const char* const debug_perf_names[] = {"Frame rate",     "Frame time",    "Game logic",
+                                               "Sky",            "Culling",       "Vertex transform",
+                                               "Triangle setup", "Far scenery",   "Characters",
+                                               "Level drawing",  "Other",         "Pixels drawn",
+                                               "Overdraw"};
+static const uint8_t debug_perf_steps[] = {PERF_LOGIC,     PERF_SKY,     PERF_CULL,     PERF_TRANSFORM,
+                                           PERF_EMIT,      PERF_FAR,     PERF_FIGURES,  PERF_LEVEL,
+                                           PERF_OTHER};
+static char* debug_append(char* out, const char* s){
+    while(*s) *out++ = *s++;
+    *out = 0;
+    return out;
+}
+static char* debug_append_number(char* out, uint32_t value){
+    char rev[10];
+    int n = 0;
+    do {
+        rev[n++] = (char)('0' + value % 10);
+        value /= 10;
+    } while(value && n < 10);
+    while(n) *out++ = rev[--n];
+    *out = 0;
+    return out;
+}
+static char* debug_append_hundredths(char* out, uint32_t hundredths){
+    out = debug_append_number(out, hundredths / 100);
+    *out++ = '.';
+    *out++ = (char)('0' + hundredths / 10 % 10);
+    *out++ = (char)('0' + hundredths % 10);
+    *out = 0;
+    return out;
+}
+static void debug_perf_value(char* out, int row){
+    uint32_t frame = g_perf_frame_us;
+    if(!frame){
+        debug_append(out, "-");
+        return;
+    }
+    if(row == 0){
+        debug_append(debug_append_hundredths(out, (100000000u + frame / 2) / frame), " fps");
+    } else if(row == 1){
+        debug_append(debug_append_hundredths(out, (frame + 5) / 10), " ms");
+    } else if(row == 11){
+        debug_append_number(out, g_perf_pixels);
+    } else if(row == 12){
+        debug_append(debug_append_hundredths(out, (g_perf_pixels * 100 + PERF_FRAME_PIXELS / 2) / PERF_FRAME_PIXELS),
+                     "x");
+    } else {
+        uint32_t us = g_perf_us[debug_perf_steps[row - 2]];
+        out = debug_append(debug_append_hundredths(out, (us + 5) / 10), " ms ");
+        debug_append(debug_append_number(out, (us * 100 + frame / 2) / frame), "%");
+    }
+}
 static const char* const debug_view_names[] = {"Full", "High", "Default", "Near", "Short"};
 static const char* const debug_zoom_names[] = {"Farthest", "Far", "Medium", "Close"};
+static const char* const debug_render_style_names[] = {"Normal", "Wireframe", "Hidden line", "Vertices"};
+static const char* const debug_line_colour_names[] = {"Green", "White"};
 
 static void debug_page(int page){
     debug_menu_invalidate();
@@ -193,6 +254,7 @@ static int debug_menu_count(void){
     case DEBUG_PAGE_POINTS: return debug_point(-1, NULL, NULL);
     case DEBUG_PAGE_OPTIONS: return sizeof debug_option_names / sizeof debug_option_names[0];
     case DEBUG_PAGE_POWERUPS: return sizeof debug_powerup_names / sizeof debug_powerup_names[0];
+    case DEBUG_PAGE_PERF: return sizeof debug_perf_names / sizeof debug_perf_names[0];
     default: return sizeof debug_home / sizeof debug_home[0];
     }
 }
@@ -251,6 +313,7 @@ static void debug_menu_choose(int direction){
     debug_menu_invalidate();
     DebugMenu* m = &g_debug_menu;
     int row = m->selected;
+    if(m->page == DEBUG_PAGE_PERF) return;
     if(m->page == DEBUG_PAGE_LEVELS){
         m->level = (uint8_t)debug_level(row);
         debug_page(DEBUG_PAGE_MISSIONS);
@@ -283,9 +346,13 @@ static void debug_menu_choose(int direction){
             }
         } else if(row == DEBUG_OPTION_TOGGLE_COUNT)
             g_game.view_distance = (g_game.view_distance + direction + VIEW_MODE_COUNT) % VIEW_MODE_COUNT;
-        else
+        else if(row == DEBUG_OPTION_TOGGLE_COUNT + 1)
             camera_set_zoom(&g_game.camera,
                             (g_game.camera_zoom + direction + CAMERA_ZOOM_COUNT) % CAMERA_ZOOM_COUNT);
+        else if(row == DEBUG_OPTION_TOGGLE_COUNT + 2)
+            g_render_style = (uint8_t)((g_render_style + direction + RENDER_STYLE_COUNT) % RENDER_STYLE_COUNT);
+        else
+            g_wire_line_colour ^= 1;
         return;
     }
     switch(row){
@@ -301,6 +368,7 @@ static void debug_menu_choose(int direction){
     case 6: g_game.star_bits = fx_min(g_game.star_bits + 100, 9999); break;
     case 7: debug_page(DEBUG_PAGE_POWERUPS); break;
     case 8: debug_start_level(STAGE_OBSERVATORY, 0); break;
+    case 9: debug_page(DEBUG_PAGE_PERF); break;
     }
 }
 static void debug_menu_tick(const KeyState* keys){
@@ -403,11 +471,13 @@ static void debug_menu_draw(uint8_t* page_bytes){
                         : m->page == DEBUG_PAGE_MISSIONS ? debug_stage_names[m->level]
                         : m->page == DEBUG_PAGE_POINTS   ? "Planet / Progression Point"
                         : m->page == DEBUG_PAGE_POWERUPS ? "Power-ups"
+                        : m->page == DEBUG_PAGE_PERF     ? "Performance"
                                                          : "Test Options";
     debug_text(framebuffer, 12, 7, title, white, 228);
     const char* subtitle = m->page == DEBUG_PAGE_HOME       ? NULL
                            : m->page == DEBUG_PAGE_POINTS   ? "Jump reloads the current mission"
                            : m->page == DEBUG_PAGE_POWERUPS ? "Applied as if collected"
+                           : m->page == DEBUG_PAGE_PERF     ? "Average of the last 0.5 s of play"
                            : m->page == DEBUG_PAGE_MISSIONS
                                ? (debug_menu_count() > 1 ? "Choose a mission" : "Start this level")
                                : debug_stage_names[g_game.stage_index];
@@ -426,6 +496,7 @@ static void debug_menu_draw(uint8_t* page_bytes){
             if(!label) label = "Enter Observatory";
         } else if(m->page == DEBUG_PAGE_OPTIONS) label = debug_option_names[row];
         else if(m->page == DEBUG_PAGE_POWERUPS) label = debug_powerup_names[row];
+        else if(m->page == DEBUG_PAGE_PERF) label = debug_perf_names[row];
         else {
             {
                 int si, oi;
@@ -439,7 +510,7 @@ static void debug_menu_draw(uint8_t* page_bytes){
                 }
             }
         }
-        int limit = m->page == DEBUG_PAGE_OPTIONS ? 175 : 202;
+        int limit = m->page == DEBUG_PAGE_OPTIONS ? 175 : m->page == DEBUG_PAGE_PERF ? 130 : 202;
         int x = debug_text(framebuffer, 16, y, label ? label : "Point", color, limit);
         if(suffix >= 0){
             debug_number(number, suffix);
@@ -448,9 +519,16 @@ static void debug_menu_draw(uint8_t* page_bytes){
         if(m->page == DEBUG_PAGE_OPTIONS){
             const char* value = row < DEBUG_OPTION_TOGGLE_COUNT
                                     ? (g_debug_options & debug_option_bits[row] ? "ON" : "OFF")
-                                : row == DEBUG_OPTION_TOGGLE_COUNT ? debug_view_names[g_game.view_distance]
-                                                                   : debug_zoom_names[g_game.camera_zoom];
+                                : row == DEBUG_OPTION_TOGGLE_COUNT     ? debug_view_names[g_game.view_distance]
+                                : row == DEBUG_OPTION_TOGGLE_COUNT + 1 ? debug_zoom_names[g_game.camera_zoom]
+                                : row == DEBUG_OPTION_TOGGLE_COUNT + 2 ? debug_render_style_names[g_render_style]
+                                                                       : debug_line_colour_names[g_wire_line_colour];
             debug_text(framebuffer, 176, y, value, white, 235);
+        }
+        if(m->page == DEBUG_PAGE_PERF){
+            char value[24];
+            debug_perf_value(value, row);
+            debug_text(framebuffer, 132, y, value, white, 235);
         }
     }
     char number[8];

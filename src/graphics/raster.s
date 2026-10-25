@@ -255,6 +255,14 @@ engine_transform_points:
     add     \x, \x, #0xFF
 .endm
 
+.macro COUNT_PIXELS
+    str     r1, [sp, #-4]!
+    ldr     r1, =g_raster_pixels
+    ldr     r9, [r1]
+    add     r9, r9, r3
+    str     r9, [r1]
+    ldr     r1, [sp], #4
+.endm
 .macro TEXEL rd, mask=r11
     and     \rd, r1, \mask
     orr     \rd, \rd, r1, lsr #24
@@ -835,6 +843,10 @@ raster_face:
     str     lr, [sp, #RF_RET]
     add     r0, sp, #RF_A
     ldmia   r0, {r1-r3}
+    ldr     r12, =g_render_style
+    ldrb    r12, [r12]
+    cmp     r12, #0
+    bne     rf_style
     mov     r7, r1, asr #16
     mov     r8, r2, asr #16
     mov     r9, r3, asr #16
@@ -1098,6 +1110,8 @@ fl_row:
     movgt   r3, #FRAME_WIDTH
     subs    r3, r3, r0
     ble     1f
+    COUNT_PIXELS
+    ldr     r9, [sp, #RF_END]
     add     r0, r8, r0
     bl      FillFlat
 1:  add     r4, r4, r5
@@ -1123,6 +1137,7 @@ tn_row:
     movgt   r3, #FRAME_WIDTH
     subs    r3, r3, r0
     ble     1f
+    COUNT_PIXELS
     add     r0, r8, r0
     bl      FillTint
 1:  add     r4, r4, r5
@@ -1162,6 +1177,17 @@ rf_section2:
     ldmia   r0, {r2, r8, r11, r12, lr}
     ldr     pc, [sp, #RF_LOOP]
 rf_done:
+    ldr     pc, [sp, #RF_RET]
+
+rf_style:
+    ldrb    r12, [sp, #RF_MODE]
+    mov     r0, r1
+    mov     r1, r2
+    mov     r2, r3
+    mov     r3, r12
+    ldr     r12, =engine_style_face
+    mov     lr, pc
+    bx      r12
     ldr     pc, [sp, #RF_RET]
 
 rf_tex:
@@ -1208,6 +1234,7 @@ t0_row:
     movgt   r3, #FRAME_WIDTH
     subs    r3, r3, r0
     ble     69f
+    COUNT_PIXELS
     mla     r1, r0, r2, lr
     add     r0, r8, r0
     SPAN_TEX #0x1F00
@@ -1235,6 +1262,7 @@ t1_row:
     movgt   r3, #FRAME_WIDTH
     subs    r3, r3, r0
     ble     69f
+    COUNT_PIXELS
     mla     r1, r0, r2, lr
     add     r0, r8, r0
     SPAN_TEX #0x1E00
@@ -1257,6 +1285,7 @@ t0u_row:
     mov     r0, r4, asr #16
     rsbs    r3, r0, r6, asr #16
     ble     69f
+    COUNT_PIXELS
     mla     r1, r0, r2, lr
     add     r0, r8, r0
     SPAN_TEX #0x1F00
@@ -1279,6 +1308,7 @@ t1u_row:
     mov     r0, r4, asr #16
     rsbs    r3, r0, r6, asr #16
     ble     69f
+    COUNT_PIXELS
     mla     r1, r0, r2, lr
     add     r0, r8, r0
     SPAN_TEX #0x1E00
@@ -1313,6 +1343,7 @@ tc_row:
     movgt   r3, #FRAME_WIDTH
     subs    r3, r3, r0
     ble     1f
+    COUNT_PIXELS
     ldr     r1, [sp, #RF_ROWB]
     mla     r1, r0, r2, r1
     add     r0, r8, r0

@@ -114,8 +114,10 @@ __attribute__((noinline)) static void draw_scene_bins_water(
         for(int bin = first_bin; bin < BIN_COUNT; bin++){
             for(Figure* figure = g_figure_bin_heads[bin]; figure; figure = figure->next){
                 if((figure->position.z < 0) != below && !scene_figure_both_sides(figure)) continue;
+                perf_lap(PERF_LEVEL);
                 if(figure->has_shadow) draw_shadow(figure, view);
                 scene_draw_figure(framebuffer, figure, view);
+                perf_lap(PERF_FIGURES);
             }
             if(heads[bin] != BIN_END) engine_draw_chain(heads[bin]);
         }
@@ -138,8 +140,10 @@ IWRAM_FN static void draw_scene_bins(uint8_t* framebuffer, Game* game, const Cam
         first_bin++;
     for(int bin = first_bin; bin <= last_bin; bin++){
         for(Figure* figure = g_figure_bin_heads[bin]; figure; figure = figure->next){
+            perf_lap(PERF_LEVEL);
             if(figure->has_shadow) draw_shadow(figure, view);
             scene_draw_figure(framebuffer, figure, view);
+            perf_lap(PERF_FIGURES);
         }
         if(g_triangle_bin_heads[bin] != BIN_END) engine_draw_chain(g_triangle_bin_heads[bin]);
     }
@@ -148,6 +152,7 @@ IWRAM_FN static void draw_scene_bins(uint8_t* framebuffer, Game* game, const Cam
 __attribute__((noinline)) static void draw_scene(uint8_t* framebuffer, Game* game){
     const Stage* stage = &game->stage;
     CameraView view;
+    perf_lap(PERF_OTHER);
     camera_build_view(&game->camera, &view);
     v3 camera_position = game->camera.position;
 
@@ -174,12 +179,14 @@ __attribute__((noinline)) static void draw_scene(uint8_t* framebuffer, Game* gam
     int triangle_count = collect_visible_triangles(
         stage, leaf_count, axis, -cam_axis[axis], camera_position, &point_count, &pool_used, g_point_marks,
         home ? MAX_POINTS - POINTS_SPLIT_RESERVE - FAR_POINTS_RESERVE : MAX_POINTS);
+    perf_lap(PERF_CULL);
     TransformJob transform_job =
         geometry_transform_job(stage->points, g_frame_points, g_screen_positions, g_point_list, point_count,
                                &view.to_screen, stage->point_shift);
     transform_job.home = home;
     transform_job.delta = g_leaf_delta;
     engine_transform_points(&transform_job);
+    perf_lap(PERF_TRANSFORM);
 
     for(int i = 0; i < BIN_COUNT; i++){
         g_triangle_bin_heads[i] = BIN_END;
@@ -216,10 +223,12 @@ __attribute__((noinline)) static void draw_scene(uint8_t* framebuffer, Game* gam
         emit_stage_triangles(&job, g_visible_triangles, triangle_count);
     }
 
+    perf_lap(PERF_EMIT);
     if(far_pass){
         scene_far_pass(&view, camera_position, axis, cam_axis, cut_bin);
     }
 
+    perf_lap(PERF_FAR);
     oceanbowl_queue(&view);
 
     for(int i = 0; i < game->figure_count; i++){
@@ -240,5 +249,7 @@ __attribute__((noinline)) static void draw_scene(uint8_t* framebuffer, Game* gam
         g_figure_bin_heads[bin] = figure;
     }
 
+    perf_lap(PERF_EMIT);
     draw_scene_bins(framebuffer, game, &view, far_pass ? 0 : g_farthest_visible_bin);
+    perf_lap(PERF_LEVEL);
 }
