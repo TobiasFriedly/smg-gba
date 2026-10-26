@@ -21,13 +21,5 @@ static void memory_set_fast_waitstates(void){
     REG_MEMCTRL = 1 << 5 | 14 << 24;
     probe = 1;
     if(probe != 1) REG_MEMCTRL = 1 << 5 | 13 << 24;
-
-    static const volatile uint32_t pattern = 0xCCAAF0C3;
-    uint16_t old = REG_WAITCNT;
-    REG_WAITCNT = 2 << 0 | 2 << 2 | 1 << 4 | 2 << 5 | 1 << 7 | 2 << 8 | 1 << 10 | 1 << 14;
-    for(int i = 0; i < 1024; i++)
-        if(pattern != 0xCCAAF0C3){
-            REG_WAITCNT = old;
-            break;
-        }
+    // ROM wait states stay at crt0's 3/1 (0x4317): 2/1 hangs the cartridge bus on 3DS (open_agb_firm).
 }
